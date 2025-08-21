@@ -3,8 +3,13 @@ package main
 import (
 	"context"
 	"flag"
+	"fmt"
+	"log"
+	"net"
 	"net/http"
+	"os"
 	"os/signal"
+	"path"
 	"syscall"
 	"time"
 
@@ -12,7 +17,6 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
-	"k8s.io/client-go/tools/clientcmd"
 	"k8s.io/klog/v2"
 
 	"github.com/garvinp/karpenter-helper/pkg/metrics"
@@ -20,7 +24,7 @@ import (
 )
 
 var (
-	kubeconfig  = flag.String("kubeconfig", "", "Path to kubeconfig file")
+	// kubeconfig  = flag.String("kubeconfig", "", "Path to kubeconfig file")
 	metricsAddr = flag.String("metrics-addr", ":8080", "Address to serve metrics on")
 )
 
@@ -74,14 +78,31 @@ func main() {
 }
 
 func getKubeConfig() (*rest.Config, error) {
-	if *kubeconfig != "" {
-		return clientcmd.BuildConfigFromFlags("", *kubeconfig)
+	restConfig := &rest.Config{
+		UserAgent: fmt.Sprintf("%s/git-%s", "test", "test123"),
 	}
 
-	if config, err := rest.InClusterConfig(); err == nil {
-		return config, nil
-	}
+	restConfig.Host = fmt.Sprintf("http://kube-frontend--%s.qa.corp.stripe.com/%s", "northwest", "mspdev")
 
-	kubeconfig := clientcmd.NewDefaultClientConfigLoadingRules().GetDefaultFilename()
-	return clientcmd.BuildConfigFromFlags("", kubeconfig)
+	httpTransport := &http.Transport{}
+	certproxyPath := path.Join(os.Getenv("HOME"), ".stripeproxy")
+	if _, err := os.Stat(certproxyPath); err == nil {
+		httpTransport.DialContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
+			return net.Dial("unix", certproxyPath)
+		}
+	} else {
+		log.Fatal("Unable to locate Stripe's cert-proxy in laptop mode")
+	}
+	restConfig.Transport = httpTransport
+	return restConfig, nil
+	// if *kubeconfig != "" {
+	// 	return clientcmd.BuildConfigFromFlags("", *kubeconfig)
+	// }
+
+	// if config, err := rest.InClusterConfig(); err == nil {
+	// 	return config, nil
+	// }
+
+	// kubeconfig := clientcmd.NewDefaultClientConfigLoadingRules().GetDefaultFilename()
+	// return clientcmd.BuildConfigFromFlags("", kubeconfig)
 }
