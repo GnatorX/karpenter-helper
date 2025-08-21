@@ -3,9 +3,7 @@ package main
 import (
 	"context"
 	"flag"
-	"fmt"
 	"net/http"
-	"os"
 	"os/signal"
 	"syscall"
 	"time"
@@ -22,7 +20,7 @@ import (
 )
 
 var (
-	kubeconfig = flag.String("kubeconfig", "", "Path to kubeconfig file")
+	kubeconfig  = flag.String("kubeconfig", "", "Path to kubeconfig file")
 	metricsAddr = flag.String("metrics-addr", ":8080", "Address to serve metrics on")
 )
 
@@ -69,7 +67,7 @@ func main() {
 
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	
+
 	if err := server.Shutdown(shutdownCtx); err != nil {
 		klog.Errorf("Server shutdown failed: %v", err)
 	}
@@ -79,11 +77,11 @@ func getKubeConfig() (*rest.Config, error) {
 	if *kubeconfig != "" {
 		return clientcmd.BuildConfigFromFlags("", *kubeconfig)
 	}
-	
+
 	if config, err := rest.InClusterConfig(); err == nil {
 		return config, nil
 	}
-	
+
 	kubeconfig := clientcmd.NewDefaultClientConfigLoadingRules().GetDefaultFilename()
 	return clientcmd.BuildConfigFromFlags("", kubeconfig)
 }

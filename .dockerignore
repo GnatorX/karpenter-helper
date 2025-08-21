@@ -1,0 +1,50 @@
+# Git
+.git
+.gitignore
+
+# Documentation
+README.md
+*.md
+
+# Docker
+Dockerfile
+.dockerignore
+
+# IDE
+.vscode
+.idea
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Build artifacts
+bin/
+dist/
+*.exe
+*.dll
+*.so
+*.dylib
+
+# Test files
+*_test.go
+test/
+tests/
+
+# Temporary files
+*.tmp
+*.temp
+*.log
+
+# Dependencies (will be downloaded during build)
+vendor/
+
+# Kubernetes manifests (if any)
+*.yaml
+*.yml
+k8s/
+
+# Dashboards (if not needed in container)
+dashboards/ 
