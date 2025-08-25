@@ -1,4 +1,4 @@
-package watchers
+package informers
 
 import (
 	"context"
@@ -6,9 +6,7 @@ import (
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/runtime"
-	"k8s.io/apimachinery/pkg/watch"
+	"k8s.io/client-go/informers"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/cache"
 	klog "k8s.io/klog/v2"
@@ -21,11 +19,11 @@ const (
 	KarpenterNodePoolLabel    = "karpenter.sh/nodepool"
 	KarpenterProvisionerLabel = "karpenter.sh/provisioner"
 	KarpenterTTLAnnotation    = "karpenter.sh/ttl"
-	
+
 	// TTL reason constants
-	TTLReasonExpired      = "ttl_expired"
+	TTLReasonExpired       = "ttl_expired"
 	TTLReasonEarlyDeletion = "early_deletion"
-	TTLReasonConfigured   = "ttl_configured"
+	TTLReasonConfigured    = "ttl_configured"
 )
 
 // NodeInformer watches nodes using informers and detects TTL-related events
@@ -54,27 +52,16 @@ type NodeInformerState struct {
 }
 
 // NewNodeInformer creates a new node informer
-func NewNodeInformer(clientset *kubernetes.Clientset, collector *metrics.Collector) (*NodeInformer, error) {
+func NewNodeInformer(ctx context.Context, clientset *kubernetes.Clientset, collector *metrics.Collector) (*NodeInformer, error) {
 	ni := &NodeInformer{
 		clientset:  clientset,
 		collector:  collector,
 		nodeStates: make(map[string]*NodeInformerState),
 		stopCh:     make(chan struct{}),
 	}
-
+	sharedInformerFactory := informers.NewSharedInformerFactory(clientset, 0)
 	// Create the informer
-	ni.informer = cache.NewSharedInformer(
-		&cache.ListWatch{
-			ListFunc: func(options metav1.ListOptions) (runtime.Object, error) {
-				return clientset.CoreV1().Nodes().List(context.TODO(), options)
-			},
-			WatchFunc: func(options metav1.ListOptions) (watch.Interface, error) {
-				return clientset.CoreV1().Nodes().Watch(context.TODO(), options)
-			},
-		},
-		&corev1.Node{},
-		0, // No resync period
-	)
+	ni.informer = sharedInformerFactory.Core().V1().Nodes().Informer()
 
 	// Set up event handlers
 	ni.informer.AddEventHandler(cache.ResourceEventHandlerFuncs{
@@ -89,6 +76,14 @@ func NewNodeInformer(clientset *kubernetes.Clientset, collector *metrics.Collect
 // Start starts the informer
 func (ni *NodeInformer) Start(ctx context.Context) error {
 	go ni.informer.Run(ctx.Done())
+
+	// Wait for the informer to sync and then process existing nodes
+	go func() {
+		if cache.WaitForCacheSync(ctx.Done(), ni.informer.HasSynced) {
+			ni.processExistingNodes()
+		}
+	}()
+
 	return nil
 }
 
@@ -252,4 +247,20 @@ func (ni *NodeInformer) ListNodes() []*NodeInformerState {
 		nodes = append(nodes, state)
 	}
 	return nodes
+}
+
+// processExistingNodes processes all existing nodes once the informer has synced
+func (ni *NodeInformer) processExistingNodes() {
+	klog.Info("Processing existing nodes after informer sync")
+
+	// Get all existing nodes from the informer cache
+	nodes := ni.informer.GetStore().List()
+
+	for _, obj := range nodes {
+		if node, ok := obj.(*corev1.Node); ok {
+			ni.onNodeAdd(node)
+		}
+	}
+
+	klog.Infof("Processed %d existing nodes", len(nodes))
 }

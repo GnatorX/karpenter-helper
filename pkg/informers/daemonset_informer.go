@@ -1,12 +1,10 @@
-package watchers
+package informers
 
 import (
 	"context"
 
 	appsv1 "k8s.io/api/apps/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/runtime"
-	"k8s.io/apimachinery/pkg/watch"
+	"k8s.io/client-go/informers"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/cache"
 	klog "k8s.io/klog/v2"
@@ -19,30 +17,31 @@ type DaemonsetInformer struct {
 	clientset *kubernetes.Clientset
 	collector *metrics.Collector
 	informer  cache.SharedInformer
+	indexer   cache.Indexer
 	stopCh    chan struct{}
 }
 
 // NewDaemonsetInformer creates a new daemonset informer
-func NewDaemonsetInformer(clientset *kubernetes.Clientset, collector *metrics.Collector) (*DaemonsetInformer, error) {
+func NewDaemonsetInformer(ctx context.Context, clientset *kubernetes.Clientset, collector *metrics.Collector) (*DaemonsetInformer, error) {
 	di := &DaemonsetInformer{
 		clientset: clientset,
 		collector: collector,
 		stopCh:    make(chan struct{}),
 	}
 
-	// Create the informer
-	di.informer = cache.NewSharedInformer(
-		&cache.ListWatch{
-			ListFunc: func(options metav1.ListOptions) (runtime.Object, error) {
-				return clientset.AppsV1().DaemonSets("").List(context.TODO(), options)
-			},
-			WatchFunc: func(options metav1.ListOptions) (watch.Interface, error) {
-				return clientset.AppsV1().DaemonSets("").Watch(context.TODO(), options)
-			},
+	sharedInformerFactory := informers.NewSharedInformerFactory(clientset, 0)
+	di.informer = sharedInformerFactory.Apps().V1().DaemonSets().Informer()
+
+	// Create an indexer for efficient daemonset lookups
+	di.indexer = cache.NewIndexer(cache.MetaNamespaceKeyFunc, cache.Indexers{
+		"name": func(obj interface{}) ([]string, error) {
+			ds, ok := obj.(*appsv1.DaemonSet)
+			if !ok {
+				return []string{}, nil
+			}
+			return []string{ds.Name}, nil
 		},
-		&appsv1.DaemonSet{},
-		0, // No resync period
-	)
+	})
 
 	// Set up event handlers
 	di.informer.AddEventHandler(cache.ResourceEventHandlerFuncs{
@@ -70,6 +69,24 @@ func (di *DaemonsetInformer) HasSynced() bool {
 	return di.informer.HasSynced()
 }
 
+// GetDaemonsetByName returns a daemonset by name from the indexer
+func (di *DaemonsetInformer) GetDaemonsetByName(name string) (*appsv1.DaemonSet, bool) {
+	// Search for daemonsets by name
+	daemonsetObjects, err := di.indexer.ByIndex("name", name)
+	if err != nil {
+		klog.Errorf("Failed to get daemonset by name %s: %v", name, err)
+		return nil, false
+	}
+
+	if len(daemonsetObjects) > 0 {
+		if ds, ok := daemonsetObjects[0].(*appsv1.DaemonSet); ok {
+			return ds, true
+		}
+	}
+
+	return nil, false
+}
+
 // onDaemonsetAdd handles daemonset addition events
 func (di *DaemonsetInformer) onDaemonsetAdd(obj interface{}) {
 	ds, ok := obj.(*appsv1.DaemonSet)
@@ -77,6 +94,12 @@ func (di *DaemonsetInformer) onDaemonsetAdd(obj interface{}) {
 		klog.Errorf("Expected *appsv1.DaemonSet, got %T", obj)
 		return
 	}
+
+	// Add to indexer
+	if err := di.indexer.Add(obj); err != nil {
+		klog.Errorf("Failed to add daemonset to indexer: %v", err)
+	}
+
 	klog.V(2).Infof("DaemonSet added: %s/%s", ds.Namespace, ds.Name)
 }
 
@@ -87,6 +110,12 @@ func (di *DaemonsetInformer) onDaemonsetUpdate(oldObj, newObj interface{}) {
 		klog.Errorf("Expected *appsv1.DaemonSet, got %T", newObj)
 		return
 	}
+
+	// Update in indexer
+	if err := di.indexer.Update(newObj); err != nil {
+		klog.Errorf("Failed to update daemonset in indexer: %v", err)
+	}
+
 	klog.V(2).Infof("DaemonSet updated: %s/%s", ds.Namespace, ds.Name)
 }
 
@@ -97,5 +126,11 @@ func (di *DaemonsetInformer) onDaemonsetDelete(obj interface{}) {
 		klog.Errorf("Expected *appsv1.DaemonSet, got %T", obj)
 		return
 	}
+
+	// Remove from indexer
+	if err := di.indexer.Delete(obj); err != nil {
+		klog.Errorf("Failed to delete daemonset from indexer: %v", err)
+	}
+
 	klog.V(2).Infof("DaemonSet deleted: %s/%s", ds.Namespace, ds.Name)
 }

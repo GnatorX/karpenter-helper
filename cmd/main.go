@@ -19,8 +19,8 @@ import (
 	"k8s.io/client-go/rest"
 	"k8s.io/klog/v2"
 
+	manager "github.com/garvinp/karpenter-helper/pkg/managers"
 	"github.com/garvinp/karpenter-helper/pkg/metrics"
-	"github.com/garvinp/karpenter-helper/pkg/watchers"
 )
 
 var (
@@ -48,7 +48,7 @@ func main() {
 	metricsCollector := metrics.NewCollector()
 	registry.MustRegister(metricsCollector)
 
-	watcherManager := watchers.NewManager(clientset, metricsCollector)
+	watcherManager := manager.NewManager(clientset, metricsCollector)
 
 	go func() {
 		if err := watcherManager.Start(ctx); err != nil {
