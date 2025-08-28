@@ -186,3 +186,17 @@ The project includes Prometheus alert rules for:
 - Significant reaping delays
 
 Import `alerts.libsonnet` into your Prometheus configuration.
+
+# Logging
+
+This project will log when it finds issues 
+
+
+
+## Incompatible Daemonset pod running on incompatible nodepool nodes
+```
+I0828 11:21:08.007042   45566 nodepool_daemonset_processor.go:137] Checking for pods from incompatible daemonsets running on incompatible nodepool nodes
+W0828 11:21:08.007307   45566 nodepool_daemonset_processor.go:215] 🚨 CRITICAL: Pod aws-k8s-system/aws-node-binpacking-v2-wg62s from incompatible daemonset aws-k8s-system/aws-node-binpacking-v2 is running on incompatible nodepool qa-northwest-dev-shared (node: i-instance-id.worker)
+E0828 11:21:08.007693   45566 nodepool_daemonset_processor.go:230] 🚨 CRITICAL: Found 1 pods from incompatible daemonsets running on incompatible nodepool nodes!
+E0828 11:21:08.007702   45566 nodepool_daemonset_processor.go:231] This indicates misconfiguration in nodepool
+```
