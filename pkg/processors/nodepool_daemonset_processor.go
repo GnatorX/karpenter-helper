@@ -2,7 +2,6 @@ package processors
 
 import (
 	"fmt"
-	"sync"
 
 	klog "k8s.io/klog/v2"
 
@@ -11,7 +10,6 @@ import (
 	"sigs.k8s.io/karpenter/pkg/scheduling"
 
 	appsv1 "k8s.io/api/apps/v1"
-	corev1 "k8s.io/api/core/v1"
 )
 
 // NodePoolDaemonsetProcessor handles cross-referencing daemonset pods with node nodepools
@@ -21,7 +19,6 @@ type NodePoolDaemonsetProcessor struct {
 	podInformer       *informers.PodInformer
 	daemonsetInformer *informers.DaemonsetInformer
 	nodepoolInformer  *informers.NodePoolInformer
-	mu                sync.RWMutex
 }
 
 // NewNodePoolDaemonsetProcessor creates a new processor
@@ -212,7 +209,7 @@ func (p *NodePoolDaemonsetProcessor) checkForRunningIncompatiblePods(daemonsets 
 		if nodepoolCompatibility, exists := daemonsetNodepoolCompatibility[daemonsetKey]; exists {
 			if isCompatible, nodepoolExists := nodepoolCompatibility[podNode.Nodepool]; nodepoolExists && !isCompatible {
 				runningIncompatibleCount++
-				klog.Warningf("🚨 CRITICAL: Pod %s/%s from incompatible daemonset %s is running on incompatible nodepool %s (node: %s)",
+				klog.Warningf("🚨 WARNNING: Pod %s/%s from incompatible daemonset %s is running on incompatible nodepool %s (node: %s)",
 					pod.Namespace, pod.Name, daemonsetKey, podNode.Nodepool, podNode.Name)
 
 				// Record a critical metric for running incompatible pods
@@ -250,140 +247,4 @@ func (p *NodePoolDaemonsetProcessor) checkDaemonsetNodeCompatibility(daemonset *
 	}
 
 	return true
-}
-
-// checkNodePodCompatibility checks if pods on a node are compatible with the node's nodepool
-func (p *NodePoolDaemonsetProcessor) checkNodePodCompatibility(nodeState *informers.NodeInformerState) bool {
-	// Get all pods from the pod informer
-	// Note: This is a simplified approach - in a real implementation you'd want to:
-	// 1. Use the pod informer's cache to find pods by node
-	// 2. Filter for daemonset pods specifically
-	// 3. Extract node selectors from the pod specs
-
-	// Get all pods from the pod informer and check for daemonset pods on this node
-	pods := p.getPodsByNode(nodeState.Name)
-
-	for _, pod := range pods {
-		if p.isDaemonsetPod(pod) {
-			daemonset := p.getDaemonsetForPod(pod)
-			// Extract node selector from daemonset spec
-			if !p.isNodeSelectorCompatible(pod, nodeState.Nodepool) {
-				klog.Warningf("Nodepool mismatch detected: Daemonset %s/%s requires nodepool selector %v, but node %s has nodepool %s",
-					pod.Namespace, pod.Name, pod.Spec.NodeSelector, nodeState.Name, nodeState.Nodepool)
-
-				// Record the mismatch metric
-				p.collector.RecordDaemonsetNodepoolMismatch(
-					daemonset.Name,
-					daemonset.Namespace,
-					nodeState.Name,
-					nodeState.Nodepool,
-				)
-				return true
-			}
-		}
-	}
-
-	return false // no mismatches found
-}
-
-// getPodsByNode retrieves all pods scheduled on a specific node
-func (p *NodePoolDaemonsetProcessor) getPodsByNode(nodeName string) []*corev1.Pod {
-	// Use the pod informer's GetPodsByNode method for efficient node-based pod lookup
-	return p.podInformer.GetPodsByNode(nodeName)
-}
-
-// isDaemonsetPod checks if a pod is owned by a daemonset
-func (p *NodePoolDaemonsetProcessor) isDaemonsetPod(pod *corev1.Pod) bool {
-	if pod == nil || pod.OwnerReferences == nil {
-		return false
-	}
-
-	for _, owner := range pod.OwnerReferences {
-		if owner.Kind == "DaemonSet" && owner.APIVersion == "apps/v1" {
-			return true
-		}
-	}
-
-	return false
-}
-
-// getDaemonsetForPod retrieves the daemonset that owns a pod
-func (p *NodePoolDaemonsetProcessor) getDaemonsetForPod(pod *corev1.Pod) *appsv1.DaemonSet {
-	if pod == nil || pod.OwnerReferences == nil {
-		return nil
-	}
-
-	for _, owner := range pod.OwnerReferences {
-		if owner.Kind == "DaemonSet" && owner.APIVersion == "apps/v1" {
-			// Use the daemonset informer to get the full object
-			daemonset, exists := p.daemonsetInformer.GetDaemonsetByName(owner.Name)
-			if exists {
-				return daemonset
-			}
-		}
-	}
-
-	return nil
-}
-
-// isNodeSelectorCompatible checks if a daemonset's requirements are compatible with a node's nodepool
-func (p *NodePoolDaemonsetProcessor) isNodeSelectorCompatible(pod *corev1.Pod, nodepool string) bool {
-	if nodepool == "" || pod == nil {
-		return true // No nodepool requirement
-	}
-	podRequirements := scheduling.NewPodRequirements(pod)
-	klog.Infof("Pod %s/%s requirements: %v", pod.Namespace, pod.Name, podRequirements)
-
-	// Get the NodePool state to check its requirements
-	nodepoolState, exists := p.nodepoolInformer.GetNodePoolState(nodepool)
-	if !exists {
-		klog.Warningf("NodePool %s not found in informer state", nodepool)
-		return false // Can't determine compatibility if nodepool not found
-	}
-
-	// If the NodePool has no requirements, it's compatible with any daemonset
-	if nodepoolState.Requirements == nil {
-		return false
-	}
-
-	// Check other requirements for compatibility
-	// The daemonset's requirements fit within  NodePool's requirements
-	if !nodepoolState.Requirements.IsCompatible(podRequirements) {
-		klog.V(3).Infof("Daemonset pod requirements are not compatible with NodePool %s requirements", nodepool)
-		return false
-	}
-
-	return true
-}
-
-// GetNodeNodepoolInfo returns information about a specific node's nodepool
-func (p *NodePoolDaemonsetProcessor) GetNodeNodepoolInfo(nodeName string) (*informers.NodeInformerState, bool) {
-	if p.nodeInformer == nil {
-		return nil, false
-	}
-
-	return p.nodeInformer.GetNodeState(nodeName)
-}
-
-// ListDaemonsetPods returns all tracked daemonset pods
-func (p *NodePoolDaemonsetProcessor) ListDaemonsetPods() []interface{} {
-	// This would return daemonset pods from the pod informer
-	// For now, return empty slice as placeholder
-	return []interface{}{}
-}
-
-// ListNodeNodepools returns all tracked node nodepools
-func (p *NodePoolDaemonsetProcessor) ListNodeNodepools() []*informers.NodeInformerState {
-	if p.nodeInformer == nil {
-		return []*informers.NodeInformerState{}
-	}
-
-	return p.nodeInformer.ListNodes()
-}
-
-// Cleanup removes old entries based on a cutoff time
-func (p *NodePoolDaemonsetProcessor) Cleanup(cutoff interface{}) {
-	// Since we're using informers, cleanup is handled by the informers themselves
-	// This method is kept for interface compatibility but doesn't need to do anything
-	klog.V(3).Info("Cleanup called on NodePoolDaemonsetProcessor - no action needed (using informers)")
 }

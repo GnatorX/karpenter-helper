@@ -12,20 +12,20 @@ const (
 
 type Collector struct {
 	mu sync.RWMutex
-	
+
 	// Daemonset mismatch metrics
 	daemonsetNodepoolMismatch *prometheus.CounterVec
-	
-	// Node TTL death metrics  
+
+	// Node TTL death metrics
 	nodeTTLDeaths *prometheus.CounterVec
-	
+
 	// Nominated pod failure metrics
-	nominatedPodFailures *prometheus.CounterVec
+	nominatedPodFailures         *prometheus.CounterVec
 	nodesCreatedForNominatedPods *prometheus.CounterVec
-	
+
 	// Node reaping issues
 	nodesNotReapedDueToNomination *prometheus.GaugeVec
-	nodeReapingDelaySeconds *prometheus.HistogramVec
+	nodeReapingDelaySeconds       *prometheus.HistogramVec
 }
 
 func NewCollector() *Collector {
@@ -38,16 +38,16 @@ func NewCollector() *Collector {
 			},
 			[]string{"daemonset", "namespace", "node", "nodepool"},
 		),
-		
+
 		nodeTTLDeaths: prometheus.NewCounterVec(
 			prometheus.CounterOpts{
 				Namespace: namespace,
-				Name:      "node_ttl_deaths_total", 
+				Name:      "node_ttl_deaths_total",
 				Help:      "Number of nodes deleted due to TTL expiration",
 			},
 			[]string{"node", "nodepool", "ttl_reason"},
 		),
-		
+
 		nominatedPodFailures: prometheus.NewCounterVec(
 			prometheus.CounterOpts{
 				Namespace: namespace,
@@ -56,7 +56,7 @@ func NewCollector() *Collector {
 			},
 			[]string{"pod", "namespace", "node", "reason"},
 		),
-		
+
 		nodesCreatedForNominatedPods: prometheus.NewCounterVec(
 			prometheus.CounterOpts{
 				Namespace: namespace,
@@ -65,7 +65,7 @@ func NewCollector() *Collector {
 			},
 			[]string{"node", "pod", "namespace", "nodepool"},
 		),
-		
+
 		nodesNotReapedDueToNomination: prometheus.NewGaugeVec(
 			prometheus.GaugeOpts{
 				Namespace: namespace,
@@ -74,7 +74,7 @@ func NewCollector() *Collector {
 			},
 			[]string{"node", "nodepool", "nominated_pod", "nominated_namespace"},
 		),
-		
+
 		nodeReapingDelaySeconds: prometheus.NewHistogramVec(
 			prometheus.HistogramOpts{
 				Namespace: namespace,
@@ -99,7 +99,7 @@ func (c *Collector) Describe(ch chan<- *prometheus.Desc) {
 func (c *Collector) Collect(ch chan<- prometheus.Metric) {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-	
+
 	c.daemonsetNodepoolMismatch.Collect(ch)
 	c.nodeTTLDeaths.Collect(ch)
 	c.nominatedPodFailures.Collect(ch)

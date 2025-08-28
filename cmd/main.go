@@ -3,13 +3,8 @@ package main
 import (
 	"context"
 	"flag"
-	"fmt"
-	"log"
-	"net"
 	"net/http"
-	"os"
 	"os/signal"
-	"path"
 	"syscall"
 	"time"
 
@@ -17,6 +12,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
+	"k8s.io/client-go/tools/clientcmd"
 	"k8s.io/klog/v2"
 
 	manager "github.com/garvinp/karpenter-helper/pkg/managers"
@@ -78,31 +74,10 @@ func main() {
 }
 
 func getKubeConfig() (*rest.Config, error) {
-	restConfig := &rest.Config{
-		UserAgent: fmt.Sprintf("%s/git-%s", "test", "test123"),
+	if config, err := rest.InClusterConfig(); err == nil {
+		return config, nil
 	}
 
-	restConfig.Host = fmt.Sprintf("http://kube-frontend--%s.qa.corp.stripe.com/%s", "northwest", "mspdev")
-
-	httpTransport := &http.Transport{}
-	certproxyPath := path.Join(os.Getenv("HOME"), ".stripeproxy")
-	if _, err := os.Stat(certproxyPath); err == nil {
-		httpTransport.DialContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
-			return net.Dial("unix", certproxyPath)
-		}
-	} else {
-		log.Fatal("Unable to locate Stripe's cert-proxy in laptop mode")
-	}
-	restConfig.Transport = httpTransport
-	return restConfig, nil
-	// if *kubeconfig != "" {
-	// 	return clientcmd.BuildConfigFromFlags("", *kubeconfig)
-	// }
-
-	// if config, err := rest.InClusterConfig(); err == nil {
-	// 	return config, nil
-	// }
-
-	// kubeconfig := clientcmd.NewDefaultClientConfigLoadingRules().GetDefaultFilename()
-	// return clientcmd.BuildConfigFromFlags("", kubeconfig)
+	kubeconfig := clientcmd.NewDefaultClientConfigLoadingRules().GetDefaultFilename()
+	return clientcmd.BuildConfigFromFlags("", kubeconfig)
 }

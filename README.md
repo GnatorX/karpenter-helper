@@ -11,7 +11,7 @@ This tool monitors and provides metrics for the following Karpenter issues:
 3. **Nominated Pod Failures**: Nodes provisioned for specific pods that never get scheduled on them
 4. **Node Reaping Issues**: Nodes that should be cleaned up but remain due to pending nominations
 
-## Metrics Exposed
+## Metrics Exposed (not fully implemented yet)
 
 | Metric | Type | Description | Labels |
 |--------|------|-------------|--------|
