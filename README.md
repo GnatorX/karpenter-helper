@@ -26,7 +26,7 @@ This tool monitors and provides metrics for the following Karpenter issues:
 
 ### Prerequisites
 
-- Go 1.21+
+- Go 1.24
 - Kubernetes cluster with Karpenter installed
 - Prometheus for metrics collection
 
