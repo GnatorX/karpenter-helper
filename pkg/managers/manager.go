@@ -3,11 +3,14 @@ package manager
 import (
 	"context"
 	"fmt"
-	"sync"
 	"time"
 
+	"k8s.io/client-go/dynamic"
+	"k8s.io/client-go/dynamic/dynamicinformer"
 	"k8s.io/client-go/kubernetes"
-	"k8s.io/client-go/tools/cache"
+	"k8s.io/client-go/rest"
+
+	kinformers "k8s.io/client-go/informers"
 	klog "k8s.io/klog/v2"
 
 	"github.com/garvinp/karpenter-helper/pkg/informers"
@@ -17,6 +20,7 @@ import (
 
 type Manager struct {
 	clientset *kubernetes.Clientset
+	config    *rest.Config
 	collector *metrics.Collector
 
 	nodeInformer      *informers.NodeInformer
@@ -25,12 +29,12 @@ type Manager struct {
 	nodepoolInformer  *informers.NodePoolInformer
 	nodepoolProcessor *processors.NodePoolDaemonsetProcessor
 	stopCh            chan struct{}
-	wg                sync.WaitGroup
 }
 
-func NewManager(clientset *kubernetes.Clientset, collector *metrics.Collector) *Manager {
+func NewManager(clientset *kubernetes.Clientset, config *rest.Config, collector *metrics.Collector) *Manager {
 	return &Manager{
 		clientset: clientset,
+		config:    config,
 		collector: collector,
 		stopCh:    make(chan struct{}),
 	}
@@ -41,48 +45,50 @@ func (m *Manager) Start(ctx context.Context) error {
 
 	var err error
 
-	m.nodeInformer, err = informers.NewNodeInformer(ctx, m.clientset, m.collector)
+	// Create dynamic client for Karpenter resources
+	// We need to get the config from the clientset
+	// config := m.clientset.RESTClient().GetConfig() // This line is removed as per the edit hint
+	dynamicClient, err := dynamic.NewForConfig(m.config)
+	if err != nil {
+		return fmt.Errorf("failed to create dynamic client: %w", err)
+	}
+
+	// Create dynamic informer factory
+	dynamicInformerFactory := dynamicinformer.NewDynamicSharedInformerFactory(dynamicClient, 0)
+
+	sharedInformerFactory := kinformers.NewSharedInformerFactory(m.clientset, 0)
+
+	m.nodeInformer, err = informers.NewNodeInformer(ctx, sharedInformerFactory, m.collector)
 	if err != nil {
 		return err
 	}
 
-	m.podInformer, err = informers.NewPodInformer(ctx, m.clientset, m.collector)
+	m.podInformer, err = informers.NewPodInformer(ctx, sharedInformerFactory, m.collector)
 	if err != nil {
 		return err
 	}
 
-	m.daemonsetInformer, err = informers.NewDaemonsetInformer(ctx, m.clientset, m.collector)
+	m.daemonsetInformer, err = informers.NewDaemonsetInformer(ctx, sharedInformerFactory, m.collector)
 	if err != nil {
 		return err
 	}
 
-	m.nodepoolInformer, err = informers.NewNodePoolInformer(ctx, m.clientset, m.collector)
+	m.nodepoolInformer, err = informers.NewNodePoolInformer(ctx, dynamicInformerFactory, m.collector)
 	if err != nil {
 		return err
 	}
 
-	// Start all informers
-	if err := m.nodeInformer.Start(ctx); err != nil {
-		return err
-	}
-	if err := m.podInformer.Start(ctx); err != nil {
-		return err
-	}
-	if err := m.daemonsetInformer.Start(ctx); err != nil {
-		return err
-	}
-	if err := m.nodepoolInformer.Start(ctx); err != nil {
-		return err
-	}
+	// Start both informer factories
+	sharedInformerFactory.Start(m.stopCh)
+	dynamicInformerFactory.Start(m.stopCh)
 
 	// Wait for all informers to sync
 	klog.Info("Waiting for informers to sync...")
-	if !cache.WaitForCacheSync(ctx.Done(),
-		m.nodeInformer.HasSynced,
-		m.podInformer.HasSynced,
-		m.daemonsetInformer.HasSynced,
-		m.nodepoolInformer.HasSynced) {
-		return fmt.Errorf("failed to sync informers")
+	synced := sharedInformerFactory.WaitForCacheSync(ctx.Done())
+	for informerType, synced := range synced {
+		if !synced {
+			return fmt.Errorf("failed to sync informers: %v", informerType)
+		}
 	}
 	klog.Info("All informers synced successfully")
 

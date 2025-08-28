@@ -48,7 +48,7 @@ func main() {
 	metricsCollector := metrics.NewCollector()
 	registry.MustRegister(metricsCollector)
 
-	watcherManager := manager.NewManager(clientset, metricsCollector)
+	watcherManager := manager.NewManager(clientset, config, metricsCollector)
 
 	go func() {
 		if err := watcherManager.Start(ctx); err != nil {

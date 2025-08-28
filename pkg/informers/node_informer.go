@@ -52,14 +52,12 @@ type NodeInformerState struct {
 }
 
 // NewNodeInformer creates a new node informer
-func NewNodeInformer(ctx context.Context, clientset *kubernetes.Clientset, collector *metrics.Collector) (*NodeInformer, error) {
+func NewNodeInformer(ctx context.Context, sharedInformerFactory informers.SharedInformerFactory, collector *metrics.Collector) (*NodeInformer, error) {
 	ni := &NodeInformer{
-		clientset:  clientset,
 		collector:  collector,
 		nodeStates: make(map[string]*NodeInformerState),
 		stopCh:     make(chan struct{}),
 	}
-	sharedInformerFactory := informers.NewSharedInformerFactory(clientset, 0)
 	// Create the informer
 	ni.informer = sharedInformerFactory.Core().V1().Nodes().Informer()
 

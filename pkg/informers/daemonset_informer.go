@@ -22,14 +22,12 @@ type DaemonsetInformer struct {
 }
 
 // NewDaemonsetInformer creates a new daemonset informer
-func NewDaemonsetInformer(ctx context.Context, clientset *kubernetes.Clientset, collector *metrics.Collector) (*DaemonsetInformer, error) {
+func NewDaemonsetInformer(ctx context.Context, sharedInformerFactory informers.SharedInformerFactory, collector *metrics.Collector) (*DaemonsetInformer, error) {
 	di := &DaemonsetInformer{
-		clientset: clientset,
 		collector: collector,
 		stopCh:    make(chan struct{}),
 	}
 
-	sharedInformerFactory := informers.NewSharedInformerFactory(clientset, 0)
 	di.informer = sharedInformerFactory.Apps().V1().DaemonSets().Informer()
 
 	// Create an indexer for efficient daemonset lookups
@@ -67,6 +65,21 @@ func (di *DaemonsetInformer) Stop() {
 // HasSynced returns true if the informer has synced
 func (di *DaemonsetInformer) HasSynced() bool {
 	return di.informer.HasSynced()
+}
+
+// ListDaemonsets returns all tracked daemonsets
+func (di *DaemonsetInformer) ListDaemonsets() []*appsv1.DaemonSet {
+	daemonsets := make([]*appsv1.DaemonSet, 0)
+
+	// Get all objects from the indexer
+	objects := di.indexer.List()
+	for _, obj := range objects {
+		if ds, ok := obj.(*appsv1.DaemonSet); ok {
+			daemonsets = append(daemonsets, ds)
+		}
+	}
+
+	return daemonsets
 }
 
 // GetDaemonsetByName returns a daemonset by name from the indexer

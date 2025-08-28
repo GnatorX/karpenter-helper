@@ -22,14 +22,12 @@ type PodInformer struct {
 }
 
 // NewPodInformer creates a new pod informer
-func NewPodInformer(ctx context.Context, clientset *kubernetes.Clientset, collector *metrics.Collector) (*PodInformer, error) {
+func NewPodInformer(ctx context.Context, sharedInformerFactory informers.SharedInformerFactory, collector *metrics.Collector) (*PodInformer, error) {
 	pi := &PodInformer{
-		clientset: clientset,
 		collector: collector,
 		stopCh:    make(chan struct{}),
 	}
 
-	sharedInformerFactory := informers.NewSharedInformerFactory(clientset, 0)
 	// Create the informer
 	pi.informer = sharedInformerFactory.Core().V1().Pods().Informer()
 
@@ -71,6 +69,21 @@ func (pi *PodInformer) Stop() {
 // HasSynced returns true if the informer has synced
 func (pi *PodInformer) HasSynced() bool {
 	return pi.informer.HasSynced()
+}
+
+// ListPods returns all tracked pods
+func (pi *PodInformer) ListPods() []*corev1.Pod {
+	pods := make([]*corev1.Pod, 0)
+
+	// Get all objects from the indexer
+	objects := pi.indexer.List()
+	for _, obj := range objects {
+		if pod, ok := obj.(*corev1.Pod); ok {
+			pods = append(pods, pod)
+		}
+	}
+
+	return pods
 }
 
 // GetStore returns the indexer for accessing pod data

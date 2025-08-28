@@ -2,6 +2,7 @@ package informers
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"time"
 
@@ -9,6 +10,10 @@ import (
 	"sigs.k8s.io/karpenter/pkg/scheduling"
 
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/client-go/dynamic/dynamicinformer"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/cache"
 	klog "k8s.io/klog/v2"
@@ -44,26 +49,38 @@ type NodePoolState struct {
 
 	// Requirements extracted from the NodePool spec
 	Requirements scheduling.Requirements
-	NodeSelector map[string]string
 	Taints       []corev1.Taint
 }
 
+// convertToNodePool converts an unstructured object to a typed NodePool
+func convertToNodePool(obj interface{}) (*karpenterv1.NodePool, error) {
+	unstructuredObj, ok := obj.(*unstructured.Unstructured)
+	if !ok {
+		return nil, fmt.Errorf("expected *unstructured.Unstructured, got %T", obj)
+	}
+
+	nodePool := &karpenterv1.NodePool{}
+	err := runtime.DefaultUnstructuredConverter.FromUnstructured(unstructuredObj.Object, nodePool)
+	if err != nil {
+		return nil, fmt.Errorf("failed to convert unstructured to NodePool: %w", err)
+	}
+
+	return nodePool, nil
+}
+
 // NewNodePoolInformer creates a new NodePool informer
-func NewNodePoolInformer(ctx context.Context, clientset *kubernetes.Clientset, collector *metrics.Collector) (*NodePoolInformer, error) {
+func NewNodePoolInformer(ctx context.Context, dynamicInformerFactory dynamicinformer.DynamicSharedInformerFactory, collector *metrics.Collector) (*NodePoolInformer, error) {
 	npi := &NodePoolInformer{
-		clientset:      clientset,
 		collector:      collector,
 		nodepoolStates: make(map[string]*NodePoolState),
 		stopCh:         make(chan struct{}),
 	}
 
-	// Create the informer
-	npi.informer = cache.NewSharedIndexInformer(
-		&cache.ListWatch{},
-		&karpenterv1.NodePool{},
-		0, // resync period
-		cache.Indexers{},
-	)
+	// Get the generic informer for NodePools using the dynamic informer factory
+	// Karpenter NodePools are in the karpenter.sh group
+	groupVersion := schema.GroupVersion{Group: "karpenter.sh", Version: "v1"}
+	genericInformer := dynamicInformerFactory.ForResource(groupVersion.WithResource("nodepools"))
+	npi.informer = genericInformer.Informer()
 
 	// Set up event handlers
 	npi.informer.AddEventHandler(cache.ResourceEventHandlerFuncs{
@@ -99,10 +116,9 @@ func (npi *NodePoolInformer) HasSynced() bool {
 	return npi.informer.HasSynced()
 }
 
-// parseNodePoolRequirements extracts requirements, node selectors, and taints from a NodePool spec
-func (npi *NodePoolInformer) parseNodePoolRequirements(nodePool *karpenterv1.NodePool) (scheduling.Requirements, map[string]string, []corev1.Taint) {
+// parseNodePoolRequirements extracts requirements and taints from a NodePool spec
+func (npi *NodePoolInformer) parseNodePoolRequirements(nodePool *karpenterv1.NodePool) (scheduling.Requirements, []corev1.Taint) {
 	var requirements scheduling.Requirements
-	var nodeSelector map[string]string
 	var taints []corev1.Taint
 
 	// Parse requirements from NodePool spec template
@@ -116,21 +132,14 @@ func (npi *NodePoolInformer) parseNodePoolRequirements(nodePool *karpenterv1.Nod
 		taints = nodePool.Spec.Template.Spec.Taints
 	}
 
-	// Note: NodePools don't have a direct NodeSelector field in the template
-	// Node selectors are typically derived from the Requirements field
-	// We can extract them using the Requirements.Labels() method if needed
-	if requirements != nil {
-		nodeSelector = requirements.Labels()
-	}
-
-	return requirements, nodeSelector, taints
+	return requirements, taints
 }
 
 // onNodePoolAdd handles NodePool addition events
 func (npi *NodePoolInformer) onNodePoolAdd(obj interface{}) {
-	nodePool, ok := obj.(*karpenterv1.NodePool)
-	if !ok {
-		klog.Errorf("Expected *karpenterv1.NodePool, got %T", obj)
+	nodePool, err := convertToNodePool(obj)
+	if err != nil {
+		klog.Errorf("Failed to convert NodePool: %v", err)
 		return
 	}
 
@@ -138,7 +147,7 @@ func (npi *NodePoolInformer) onNodePoolAdd(obj interface{}) {
 	defer npi.mu.Unlock()
 
 	// Parse requirements from the NodePool spec
-	requirements, nodeSelector, taints := npi.parseNodePoolRequirements(nodePool)
+	requirements, taints := npi.parseNodePoolRequirements(nodePool)
 
 	// Create NodePool state
 	state := &NodePoolState{
@@ -149,7 +158,6 @@ func (npi *NodePoolInformer) onNodePoolAdd(obj interface{}) {
 		Status:       nodePool.Status,
 		LastSeen:     time.Now(),
 		Requirements: requirements,
-		NodeSelector: nodeSelector,
 		Taints:       taints,
 	}
 
@@ -168,9 +176,9 @@ func (npi *NodePoolInformer) onNodePoolAdd(obj interface{}) {
 
 // onNodePoolUpdate handles NodePool update events
 func (npi *NodePoolInformer) onNodePoolUpdate(oldObj, newObj interface{}) {
-	newNodePool, ok := newObj.(*karpenterv1.NodePool)
-	if !ok {
-		klog.Errorf("Expected *karpenterv1.NodePool, got %T", newObj)
+	newNodePool, err := convertToNodePool(newObj)
+	if err != nil {
+		klog.Errorf("Failed to convert updated NodePool: %v", err)
 		return
 	}
 
@@ -200,9 +208,9 @@ func (npi *NodePoolInformer) onNodePoolUpdate(oldObj, newObj interface{}) {
 
 // onNodePoolDelete handles NodePool deletion events
 func (npi *NodePoolInformer) onNodePoolDelete(obj interface{}) {
-	nodePool, ok := obj.(*karpenterv1.NodePool)
-	if !ok {
-		klog.Errorf("Expected *karpenterv1.NodePool, got %T", obj)
+	nodePool, err := convertToNodePool(obj)
+	if err != nil {
+		klog.Errorf("Failed to convert deleted NodePool: %v", err)
 		return
 	}
 
@@ -222,8 +230,10 @@ func (npi *NodePoolInformer) processExistingNodePools() {
 	nodepools := npi.informer.GetStore().List()
 
 	for _, obj := range nodepools {
-		if nodePool, ok := obj.(*karpenterv1.NodePool); ok {
+		if nodePool, err := convertToNodePool(obj); err == nil {
 			npi.onNodePoolAdd(nodePool)
+		} else {
+			klog.Errorf("Failed to convert existing NodePool: %v", err)
 		}
 	}
 
